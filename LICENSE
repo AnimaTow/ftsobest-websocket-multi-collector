@@ -1,0 +1,101 @@
+FTSOBest Source Available License (Non-Commercial)
+
+Version 1.0 – 2026
+
+Copyright (c) 2026 AnimaTow
+Project: FTSOBest WebSocket Multi Collector
+Website: https://ftso.best
+
+
+1. Definitions
+
+"Software" refers to the source code and any associated files contained
+in this repository.
+
+"Author" refers to AnimaTow, the original creator and copyright holder
+of the Software.
+
+"Non-Commercial Use" means usage of the Software solely for personal,
+educational, research, or internal evaluation purposes, without any
+direct or indirect commercial benefit.
+
+"Commercial Use" includes, but is not limited to:
+- Selling the Software or derivatives
+- Offering the Software as part of a paid product or service
+- Using the Software in a commercial SaaS, hosted service, or platform
+- Using the Software in business operations that generate revenue
+- Redistributing the Software as part of a commercial offering
+
+
+2. Grant of Rights
+
+The Author grants you a non-exclusive, non-transferable, worldwide,
+royalty-free license to:
+
+- View, study, and modify the source code
+- Use the Software for Non-Commercial Use only
+- Run the Software locally or internally for testing and evaluation
+- Submit contributions (pull requests) to this repository
+
+
+3. Restrictions
+
+You may NOT, without explicit written permission from the Author:
+
+- Use the Software for any Commercial Use
+- Sell, sublicense, or redistribute the Software
+- Offer the Software as a hosted service or SaaS
+- Include the Software in a commercial product or service
+- Remove or alter copyright or license notices
+
+Any Commercial Use requires a separate commercial license agreement
+with the Author.
+
+
+4. Contributions
+
+By submitting a contribution (code, documentation, or other materials)
+to this repository, you agree that:
+
+- Your contribution may be included in the Software
+- The Author may use, modify, relicense, or distribute your contribution
+  under the terms of this license or a commercial license
+- You retain authorship of your contribution, but grant the Author
+  unlimited rights to use it
+
+
+5. Ownership
+
+The Software is and remains the exclusive property of the Author.
+
+This license does not grant you ownership of the Software or any
+intellectual property rights beyond the limited rights explicitly stated.
+
+
+6. Disclaimer of Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE,
+ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE
+OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+7. Termination
+
+Any violation of this license automatically terminates your rights
+under this license.
+
+Upon termination, you must immediately cease all use of the Software
+and destroy any copies in your possession.
+
+
+8. Contact
+
+For commercial licensing, permissions, or other inquiries, contact:
+
+Author: AnimaTow
+Website: https://ftso.best
