@@ -125,4 +125,5 @@ cargo build --release
 
 ## License
 
-Private / Proprietary
+License: Source Available – Non-Commercial  
+Commercial use requires a separate license.
