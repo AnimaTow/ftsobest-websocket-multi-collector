@@ -6,7 +6,7 @@
 ██║        ██║   ███████║╚██████╔╝██████╔╝███████╗███████║   ██║   
 ╚═╝        ╚═╝   ╚══════╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝   ╚═╝   
         WebSocket Multi-Exchange Market Data Collector
-        Built by AnimaTow  <> Project: https://ftso.best
+            Built by AnimaTow : https://ftso.best
 ```
 # FTSOBest WebSocket Multi Collector
 
