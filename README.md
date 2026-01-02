@@ -61,14 +61,15 @@ Master Service
 
 Currently implemented:
 - Gate.io
-
-Planned:
 - Binance
 - Binance US
 - Coinbase
 - OKX
 - KuCoin
 - Bitrue
+-
+Planned:
+- Mexc
 
 ---
 
