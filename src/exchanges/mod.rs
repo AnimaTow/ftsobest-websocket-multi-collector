@@ -10,8 +10,14 @@
 
 pub mod adapter;
 pub mod gateio;
-// pub mod binance;
-// pub mod okx;
+pub mod binanceus;
+pub mod binance;
+pub mod okx;
+mod bitrue;
+mod kucoin;
+mod coinbase;
+mod bybit;
+mod mexc;
 
 use std::sync::Arc;
 use adapter::ExchangeAdapter;
@@ -50,11 +56,13 @@ use adapter::ExchangeAdapter;
 pub fn get_adapter(name: &str) -> Option<Arc<dyn ExchangeAdapter>> {
     match name {
         "gateio" => Some(Arc::new(gateio::GateIoAdapter)),
-
-        // Planned / future exchanges:
-        // "binance" => Some(Arc::new(binance::BinanceAdapter)),
-        // "okx"     => Some(Arc::new(okx::OkxAdapter)),
-
+        "binanceus" => Some(Arc::new(binanceus::BinanceUsAdapter)),
+        "binance" => Some(Arc::new(binance::BinanceAdapter)),
+        "okx"     => Some(Arc::new(okx::OkxAdapter)),
+        "bitrue"     => Some(Arc::new(bitrue::BitrueAdapter)),
+        "kucoin" => Some(Arc::new(kucoin::KucoinAdapter)),
+        "coinbase" => Some(Arc::new(coinbase::CoinbaseAdapter)),
+        "bybit" => Some(Arc::new(bybit::BybitAdapter)),
         _ => None,
     }
 }

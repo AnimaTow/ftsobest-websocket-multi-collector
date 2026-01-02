@@ -82,12 +82,11 @@ pub fn now_ms() -> i64 {
 ///
 pub fn symbol_to_exchange(exchange: &str, symbol: &str) -> String {
     match exchange {
-        "gateio" | "bitrue" => symbol.replace('/', "_"),
-
-        "binance" | "binanceus" => symbol.replace('/', ""),
-
+        "gateio" => symbol.replace('/', "_"),
+        "bitrue" => symbol.replace('/', "").to_lowercase(),
+        "binance" | "binanceus" | "bybit" => symbol.replace('/', ""),
         "okx" | "kucoin" | "coinbase" => symbol.replace('/', "-"),
-
+        "mexc" => symbol.replace('/', "_"),
         _ => symbol.to_string(),
     }
 }
@@ -114,21 +113,47 @@ pub fn symbol_to_exchange(exchange: &str, symbol: &str) -> String {
 ///   using known quote assets (USDT, USD, BTC, etc.).
 /// - Move complex parsing into dedicated exchange adapters.
 ///
+///
+const BINANCE_QUOTES: [&str; 2] = [
+    "USDT",
+    "USD"
+];
 pub fn symbol_from_exchange(exchange: &str, symbol: &str) -> String {
     match exchange {
-        "gateio" | "bitrue" => symbol.replace('_', "/"),
-
+        "gateio" => symbol.replace('_', "/"),
+        "mexc" => symbol.replace('_', "/"),
         "binance" | "binanceus" => {
-            // Binance symbols do not include a separator.
-            // This is intentionally left as-is for now.
-            //
-            // Example: "BTCUSDT" -> requires external logic
-            // to split into BASE/QUOTE.
+            for quote in BINANCE_QUOTES {
+                if symbol.ends_with(quote) {
+                    let base = &symbol[..symbol.len() - quote.len()];
+                    if !base.is_empty() {
+                        return format!("{}/{}", base, quote);
+                    }
+                }
+            }
+
+            // Fallback – should never happen for valid config symbols
             symbol.to_string()
-        }
-
+        },
         "okx" | "kucoin" | "coinbase" => symbol.replace('-', "/"),
-
+        "bybit" => {
+            for quote in ["USDT", "USD"] {
+                if symbol.ends_with(quote) {
+                    let base = &symbol[..symbol.len() - quote.len()];
+                    return format!("{}/{}", base, quote);
+                }
+            }
+            symbol.to_string()
+        },
+        "bitrue" => {
+            if symbol.ends_with("usdt") {
+                format!("{}/USDT", symbol[..symbol.len() - 4].to_uppercase())
+            } else if symbol.ends_with("usd") {
+                format!("{}/USD", symbol[..symbol.len() - 3].to_uppercase())
+            } else {
+                symbol.to_uppercase()
+            }
+        },
         _ => symbol.to_string(),
     }
 }
