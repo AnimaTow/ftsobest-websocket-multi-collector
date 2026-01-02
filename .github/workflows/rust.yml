@@ -25,10 +25,8 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
-      - name: Run helper scripts
+      - name: Run exchange helper checks
         shell: bash
         run: |
-          echo "::group::Binance supported trades check"
-          chmod +x helper/binance_supported_trades.sh
-          helper/binance_supported_trades.sh
-          echo "::endgroup::"
+          chmod +x helper/run_all_supported_trades.sh
+          helper/run_all_supported_trades.sh

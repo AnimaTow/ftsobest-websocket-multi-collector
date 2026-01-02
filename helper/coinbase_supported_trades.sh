@@ -20,16 +20,31 @@ trap cleanup EXIT
 # -----------------------------
 # FETCH DATA
 # -----------------------------
-echo "→ Lade feeds.json von GitHub"
+echo "→ Fetching feeds.json from GitHub"
 curl -fsSL "$FEEDS_URL" -o "$FEEDS_JSON"
 
-echo "→ Lade Coinbase products"
+echo "→ Fetching Coinbase products"
 curl -fsSL "$COINBASE_PRODUCTS_URL" \
-  | jq -r '.[]
+  | jq -r '
+      .[]
       | select(.status=="online")
       | select(.trading_disabled==false)
-      | "\(.base_currency)-\(.quote_currency)"' \
+      | "\(.base_currency | ascii_upcase)-\(.quote_currency | ascii_upcase)"
+    ' \
   > "$COINBASE_SYMBOLS"
+
+# -----------------------------
+# BASIC VALIDATION
+# -----------------------------
+if [[ ! -s "$FEEDS_JSON" ]]; then
+  echo "❌ feeds.json is empty"
+  exit 1
+fi
+
+if [[ ! -s "$COINBASE_SYMBOLS" ]]; then
+  echo "❌ Coinbase symbol list is empty"
+  exit 1
+fi
 
 # -----------------------------
 # PROCESS
@@ -38,14 +53,30 @@ echo
 echo "[COINBASE – SUPPORTED TRADE PAIRS]"
 echo
 
-jq -r '.[].feed.name' "$FEEDS_JSON" \
-| cut -d/ -f1 \
-| sort -u \
-| while read -r BASE; do
-    for QUOTE in "${QUOTES[@]}"; do
-      SYMBOL="${BASE}-${QUOTE}"
-      if grep -qx "$SYMBOL" "$COINBASE_SYMBOLS"; then
-        echo "\"$BASE/$QUOTE\","
-      fi
-    done
+FOUND=0
+
+while read -r BASE; do
+  for QUOTE in "${QUOTES[@]}"; do
+    SYMBOL="${BASE}-${QUOTE}"
+    if grep -qx "$SYMBOL" "$COINBASE_SYMBOLS"; then
+      echo "\"$BASE/$QUOTE\","
+      FOUND=$((FOUND + 1))
+    fi
   done
+done < <(
+  jq -r '.[].feed.name' "$FEEDS_JSON" \
+  | cut -d/ -f1 \
+  | sort -u
+)
+
+# -----------------------------
+# FINAL ASSERTION (CI)
+# -----------------------------
+if [[ "$FOUND" -eq 0 ]]; then
+  echo
+  echo "❌ No supported Coinbase trade pairs found"
+  exit 1
+fi
+
+echo
+echo "✅ $FOUND supported Coinbase trade pairs found"
