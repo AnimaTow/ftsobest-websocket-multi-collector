@@ -2,6 +2,12 @@ use serde_json::Value;
 use crate::schema::MarketMessage;
 use crate::config::ExchangeConfig;
 
+pub enum ParseResult {
+    Market(MarketMessage),
+    Control,
+    Error,
+}
+
 /// Defines the supported logical data channels.
 ///
 /// These are *logical* channels used by the collector.
@@ -133,5 +139,5 @@ pub trait ExchangeAdapter: Send + Sync {
         &self,
         raw: &str,
         exchange_name: &str,
-    ) -> Option<MarketMessage>;
+    ) -> ParseResult;
 }

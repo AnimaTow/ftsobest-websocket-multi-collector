@@ -6,7 +6,7 @@ use crate::{
     config::ExchangeConfig,
 };
 
-use super::adapter::{ExchangeAdapter, ChannelType};
+use super::adapter::{ExchangeAdapter, ChannelType, ParseResult};
 
 /// Bybit Spot WebSocket adapter
 ///
@@ -16,11 +16,6 @@ use super::adapter::{ExchangeAdapter, ChannelType};
 /// Channels:
 /// - publicTrade.{symbol}
 /// - orderbook.50.{symbol}
-///
-/// DESIGN:
-/// - Pure protocol translation
-/// - No reconnect logic
-/// - No runtime logic
 pub struct BybitAdapter;
 
 #[async_trait::async_trait]
@@ -63,43 +58,81 @@ impl ExchangeAdapter for BybitAdapter {
         &self,
         raw: &str,
         exchange: &str,
-    ) -> Option<MarketMessage> {
+    ) -> ParseResult {
 
-        let v: Value = serde_json::from_str(raw).ok()?;
+        let v: Value = match serde_json::from_str(raw) {
+            Ok(v) => v,
+            Err(_) => return ParseResult::Error,
+        };
 
-        let topic = v.get("topic")?.as_str()?;
-        let data  = v.get("data")?;
+        // --------------------------------------------------
+        // Control messages (subscribe ack, pong, etc.)
+        // --------------------------------------------------
+        if v.get("op").is_some() {
+            return ParseResult::Control;
+        }
+
+        let topic = match v.get("topic").and_then(|t| t.as_str()) {
+            Some(t) => t,
+            None => return ParseResult::Control,
+        };
+
+        let data = match v.get("data") {
+            Some(d) => d,
+            None => return ParseResult::Control,
+        };
 
         // --------------------------------------------------
         // TRADES
         // --------------------------------------------------
         if topic.starts_with("publicTrade.") {
-            let trades = data.as_array()?;
-            let t = trades.first()?;
 
-            return Some(MarketMessage::Trade(TradeData {
+            let trades = match data.as_array() {
+                Some(t) if !t.is_empty() => t,
+                _ => return ParseResult::Control,
+            };
+
+            let t = &trades[0];
+
+            let msg = MarketMessage::Trade(TradeData {
                 exchange: exchange.to_string(),
                 symbol: util::symbol_from_exchange(
                     exchange,
-                    t.get("s")?.as_str()?
+                    t.get("s").and_then(|v| v.as_str()).unwrap_or_default()
                 ),
                 timestamp: t.get("T")
                     .and_then(|v| v.as_i64())
                     .unwrap_or_else(util::now_ms),
-                price: t.get("p")?.as_str()?.to_string(),
-                amount: t.get("v")?.as_str()?.to_string(),
-                side: t.get("S")?.as_str()?.to_lowercase(),
-            }));
+                price: t.get("p")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                amount: t.get("v")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                side: t.get("S")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_lowercase(),
+            });
+
+            return ParseResult::Market(msg);
         }
 
         // --------------------------------------------------
-        // ORDER BOOK (delta)
+        // ORDER BOOK
         // --------------------------------------------------
         if topic.starts_with("orderbook.") {
-            let symbol = data.get("s")?.as_str()?;
 
-            let asks = data.get("a")?
-                .as_array()?
+            let symbol = match data.get("s").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => return ParseResult::Error,
+            };
+
+            let asks = data.get("a")
+                .and_then(|v| v.as_array())
+                .unwrap_or(&vec![])
                 .iter()
                 .filter_map(|x| {
                     Some([
@@ -109,8 +142,9 @@ impl ExchangeAdapter for BybitAdapter {
                 })
                 .collect::<Vec<[String; 2]>>();
 
-            let bids = data.get("b")?
-                .as_array()?
+            let bids = data.get("b")
+                .and_then(|v| v.as_array())
+                .unwrap_or(&vec![])
                 .iter()
                 .filter_map(|x| {
                     Some([
@@ -120,7 +154,7 @@ impl ExchangeAdapter for BybitAdapter {
                 })
                 .collect::<Vec<[String; 2]>>();
 
-            return Some(MarketMessage::Book(BookData {
+            let msg = MarketMessage::Book(BookData {
                 exchange: exchange.to_string(),
                 symbol: util::symbol_from_exchange(exchange, symbol),
                 timestamp: data.get("ts")
@@ -128,9 +162,11 @@ impl ExchangeAdapter for BybitAdapter {
                     .unwrap_or_else(util::now_ms),
                 asks,
                 bids,
-            }));
+            });
+
+            return ParseResult::Market(msg);
         }
 
-        None
+        ParseResult::Control
     }
 }

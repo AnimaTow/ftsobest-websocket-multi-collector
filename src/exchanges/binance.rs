@@ -6,7 +6,7 @@ use crate::{
     config::ExchangeConfig,
 };
 
-use super::adapter::{ExchangeAdapter, ChannelType};
+use super::adapter::{ExchangeAdapter, ChannelType, ParseResult};
 
 /// Binance (Global) WebSocket adapter
 ///
@@ -61,52 +61,70 @@ impl ExchangeAdapter for BinanceAdapter {
         &self,
         raw: &str,
         exchange: &str,
-    ) -> Option<MarketMessage> {
+    ) -> ParseResult {
 
-        let v: Value = serde_json::from_str(raw).ok()?;
-
-        // Binance Combined Stream Wrapper
-        let (_stream, data) = if v.get("stream").is_some() {
-            (
-                v.get("stream")?.as_str()?,
-                v.get("data")?
-            )
-        } else {
-            // Fallback: single stream format
-            ("", &v)
+        let v: Value = match serde_json::from_str(raw) {
+            Ok(v) => v,
+            Err(_) => return ParseResult::Error,
         };
 
-        let event = data.get("e")?.as_str()?;
+        // --------------------------------------------------
+        // Binance control / ack messages
+        // --------------------------------------------------
+        // Example:
+        // { "result": null, "id": 123 }
+        if v.get("result").is_some() {
+            return ParseResult::Control;
+        }
+
+        // --------------------------------------------------
+        // Binance Combined Stream Wrapper
+        // --------------------------------------------------
+        let data = if let Some(d) = v.get("data") {
+            d
+        } else {
+            &v
+        };
+
+        let event = match data.get("e").and_then(|e| e.as_str()) {
+            Some(e) => e,
+            None => return ParseResult::Control, // ping / keepalive / unknown control
+        };
 
         match event {
 
             // -----------------------------
             // TRADES
             // -----------------------------
-            "trade" => Some(MarketMessage::Trade(TradeData {
-                exchange: exchange.to_string(),
-                symbol: util::symbol_from_exchange(
-                    exchange,
-                    data["s"].as_str()?
-                ),
-                timestamp: data["T"]
-                    .as_i64()
-                    .unwrap_or_else(util::now_ms),
-                price: data["p"].as_str()?.to_string(),
-                amount: data["q"].as_str()?.to_string(),
-                side: if data["m"].as_bool()? {
-                    "sell".into()
-                } else {
-                    "buy".into()
-                },
-            })),
+            "trade" => {
+                let msg = MarketMessage::Trade(TradeData {
+                    exchange: exchange.to_string(),
+                    symbol: util::symbol_from_exchange(
+                        exchange,
+                        data["s"].as_str().unwrap_or_default()
+                    ),
+                    timestamp: data["T"]
+                        .as_i64()
+                        .unwrap_or_else(util::now_ms),
+                    price: data["p"].as_str().unwrap_or("0").to_string(),
+                    amount: data["q"].as_str().unwrap_or("0").to_string(),
+                    side: if data["m"].as_bool().unwrap_or(false) {
+                        "sell".into()
+                    } else {
+                        "buy".into()
+                    },
+                });
+
+                ParseResult::Market(msg)
+            }
 
             // -----------------------------
             // ORDER BOOK (delta)
             // -----------------------------
             "depthUpdate" => {
                 let asks = data["a"]
-                    .as_array()?
+                    .as_array()
+                    .unwrap_or(&vec![])
                     .iter()
                     .filter_map(|x| {
                         let price = x.get(0)?.as_str()?;
@@ -119,7 +137,8 @@ impl ExchangeAdapter for BinanceAdapter {
                     .collect();
 
                 let bids = data["b"]
-                    .as_array()?
+                    .as_array()
+                    .unwrap_or(&vec![])
                     .iter()
                     .filter_map(|x| {
                         let price = x.get(0)?.as_str()?;
@@ -131,21 +150,27 @@ impl ExchangeAdapter for BinanceAdapter {
                     })
                     .collect();
 
-                Some(MarketMessage::Book(BookData {
+                let msg = MarketMessage::Book(BookData {
                     exchange: exchange.to_string(),
                     symbol: util::symbol_from_exchange(
                         exchange,
-                        data["s"].as_str()?
+                        data["s"].as_str().unwrap_or_default()
                     ),
                     timestamp: data["E"]
                         .as_i64()
                         .unwrap_or_else(util::now_ms),
                     asks,
                     bids,
-                }))
+                });
+
+                ParseResult::Market(msg)
             }
 
-            _ => None,
+            // -----------------------------
+            // Everything else
+            // -----------------------------
+            _ => ParseResult::Control,
         }
     }
+
 }

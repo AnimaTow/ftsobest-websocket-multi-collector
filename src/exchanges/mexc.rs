@@ -6,7 +6,7 @@ use crate::{
     config::ExchangeConfig,
 };
 
-use super::adapter::{ExchangeAdapter, ChannelType};
+use super::adapter::{ExchangeAdapter, ChannelType, ParseResult};
 
 /// MEXC WebSocket adapter (Futures deal stream)
 ///
@@ -18,12 +18,6 @@ use super::adapter::{ExchangeAdapter, ChannelType};
 /// - No token
 /// - Trades only
 /// - One symbol per WS connection (recommended)
-///
-/// DESIGN:
-/// - Pure protocol translation
-/// - No reconnect logic
-/// - No business logic
-/// - Fully compatible with generic runner
 pub struct MexcAdapter;
 
 #[async_trait::async_trait]
@@ -43,10 +37,9 @@ impl ExchangeAdapter for MexcAdapter {
         pairs: &[String],
         _config: &ExchangeConfig,
     ) -> Value {
-        
+
         match channel {
             ChannelType::Trades => {
-                // MEXC strongly prefers one symbol per connection
                 let pair = &pairs[0];
 
                 // BTC/USDT -> BTC_USDT
@@ -70,34 +63,58 @@ impl ExchangeAdapter for MexcAdapter {
         &self,
         raw: &str,
         exchange: &str,
-    ) -> Option<MarketMessage> {
+    ) -> ParseResult {
 
-        let v: Value = serde_json::from_str(raw).ok()?;
+        let v: Value = match serde_json::from_str(raw) {
+            Ok(v) => v,
+            Err(_) => return ParseResult::Error,
+        };
 
-        // We only care about deal pushes
-        if v.get("channel")?.as_str()? != "push.deal" {
-            return None;
+        let channel = match v.get("channel").and_then(|v| v.as_str()) {
+            Some(c) => c,
+            None => return ParseResult::Control,
+        };
+
+        // --------------------------------------------------
+        // Only deal pushes are relevant
+        // --------------------------------------------------
+        if channel != "push.deal" {
+            return ParseResult::Control;
         }
 
-        let symbol_raw = v.get("symbol")?.as_str()?;
+        let symbol_raw = match v.get("symbol").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => return ParseResult::Error,
+        };
+
         let symbol = util::symbol_from_exchange(exchange, symbol_raw);
 
-        let trades = v.get("data")?.as_array()?;
-        let t = trades.first()?; // usually exactly one trade
+        let trades = match v.get("data").and_then(|v| v.as_array()) {
+            Some(t) if !t.is_empty() => t,
+            _ => return ParseResult::Control,
+        };
 
-        Some(MarketMessage::Trade(TradeData {
+        let t = &trades[0];
+
+        let msg = MarketMessage::Trade(TradeData {
             exchange: exchange.to_string(),
             symbol,
             timestamp: t.get("t")
                 .and_then(|v| v.as_i64())
                 .unwrap_or_else(util::now_ms),
-            price: t.get("p")?.to_string(),
-            amount: t.get("v")?.to_string(),
-            side: match t.get("S")?.as_i64()? {
-                1 => "buy".into(),
-                2 => "sell".into(),
+            price: t.get("p")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "0".to_string()),
+            amount: t.get("v")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "0".to_string()),
+            side: match t.get("S").and_then(|v| v.as_i64()) {
+                Some(1) => "buy".into(),
+                Some(2) => "sell".into(),
                 _ => "unknown".into(),
             },
-        }))
+        });
+
+        ParseResult::Market(msg)
     }
 }

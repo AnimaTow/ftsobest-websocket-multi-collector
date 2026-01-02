@@ -6,14 +6,14 @@ use crate::{
     config::ExchangeConfig,
 };
 
-use super::adapter::{ExchangeAdapter, ChannelType};
+use super::adapter::{ExchangeAdapter, ChannelType, ParseResult};
 
 /// KuCoin WebSocket adapter
 ///
-/// WICHTIG:
-/// - Holt KEINE WS-URL
-/// - Macht KEIN IO
-/// - Übersetzt NUR Protokoll → MarketMessage
+/// IMPORTANT:
+/// - Does NOT fetch WS URL
+/// - Does NOT perform IO
+/// - Pure protocol → MarketMessage translation
 ///
 /// Trades only.
 pub struct KucoinAdapter;
@@ -25,9 +25,9 @@ impl ExchangeAdapter for KucoinAdapter {
         "kucoin"
     }
 
-    /// Für KuCoin NICHT verwendet
+    /// Not used for KuCoin
     ///
-    /// Die echte WS-URL wird vom Runner gesetzt
+    /// The real WS URL is injected by the runner
     fn ws_url(&self) -> &'static str {
         ""
     }
@@ -60,33 +60,68 @@ impl ExchangeAdapter for KucoinAdapter {
         &self,
         raw: &str,
         exchange: &str,
-    ) -> Option<MarketMessage> {
-        let v: Value = serde_json::from_str(raw).ok()?;
+    ) -> ParseResult {
 
-        // Nur echte Daten
-        if v.get("type")?.as_str()? != "message" {
-            return None;
+        let v: Value = match serde_json::from_str(raw) {
+            Ok(v) => v,
+            Err(_) => return ParseResult::Error,
+        };
+
+        let msg_type = match v.get("type").and_then(|v| v.as_str()) {
+            Some(t) => t,
+            None => return ParseResult::Control,
+        };
+
+        // --------------------------------------------------
+        // Control messages
+        // --------------------------------------------------
+        if msg_type != "message" {
+            return ParseResult::Control;
         }
 
-        let topic = v.get("topic")?.as_str()?;
+        let topic = match v.get("topic").and_then(|v| v.as_str()) {
+            Some(t) => t,
+            None => return ParseResult::Control,
+        };
+
         if !topic.starts_with("/market/match:") {
-            return None;
+            return ParseResult::Control;
         }
 
-        let sym = topic.split(':').nth(1)?;
-        let d = v.get("data")?;
+        let sym = match topic.split(':').nth(1) {
+            Some(s) => s,
+            None => return ParseResult::Error,
+        };
 
-        Some(MarketMessage::Trade(TradeData {
+        let d = match v.get("data") {
+            Some(d) => d,
+            None => return ParseResult::Error,
+        };
+
+        let timestamp = d.get("time")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<i128>().ok())
+            .map(|ns| (ns / 1_000_000) as i64)
+            .unwrap_or_else(util::now_ms);
+
+        let msg = MarketMessage::Trade(TradeData {
             exchange: exchange.to_string(),
             symbol: util::symbol_from_exchange(exchange, sym),
-            timestamp: d["time"]
-                .as_str()
-                .and_then(|s| s.parse::<i128>().ok())
-                .map(|ns| (ns / 1_000_000) as i64)
-                .unwrap_or_else(util::now_ms),
-            price: d["price"].as_str()?.to_string(),
-            amount: d["size"].as_str()?.to_string(),
-            side: d["side"].as_str()?.to_string(),
-        }))
+            timestamp,
+            price: d.get("price")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string(),
+            amount: d.get("size")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string(),
+            side: d.get("side")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+        });
+
+        ParseResult::Market(msg)
     }
 }

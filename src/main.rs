@@ -17,7 +17,7 @@ mod util;
 mod exchanges;
 mod master_sender;
 mod collector;
-
+mod metrics;
 // ------------------------------------------------------------
 // External dependencies
 // ------------------------------------------------------------
@@ -28,8 +28,12 @@ use config::Config;
 use exchanges::get_adapter;
 use collector::runner::run_exchange;
 use master_sender::MasterPool;
+use metrics::METRICS;
 
 use std::fs;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::time::sleep;
 
 // ------------------------------------------------------------
 // Application entry point
@@ -89,14 +93,30 @@ async fn main() -> anyhow::Result<()> {
     ).await;
 
     // --------------------------------------------------------
+    // Start metrics reporter (periodic, low-noise)
+    // --------------------------------------------------------
+    tokio::spawn(async {
+        loop {
+            sleep(Duration::from_secs(10)).await;
+
+            println!(
+                "[METRICS] ex={} ws={} tp={} ob={} recv={} sent={} dropped={} parse_err={} send_err={} reconnects={}",
+                METRICS.exchanges_active.load(Ordering::Relaxed),
+                METRICS.ws_connections_active.load(Ordering::Relaxed),
+                METRICS.trade_pairs_active.load(Ordering::Relaxed),
+                METRICS.orderbook_pairs_active.load(Ordering::Relaxed),
+                METRICS.trades_received.load(Ordering::Relaxed),
+                METRICS.trades_forwarded.load(Ordering::Relaxed),
+                METRICS.dropped_messages.load(Ordering::Relaxed),
+                METRICS.parse_errors.load(Ordering::Relaxed),
+                METRICS.send_errors.load(Ordering::Relaxed),
+                METRICS.ws_reconnects.load(Ordering::Relaxed),
+            );
+        }
+    });
+
+    // --------------------------------------------------------
     // Start all enabled exchange collectors
-    //
-    // Each exchange:
-    // - Resolves its adapter implementation
-    // - Spawns independent WebSocket runtimes
-    // - Shares the same MasterPool
-    //
-    // Unsupported exchanges are skipped gracefully.
     // --------------------------------------------------------
     for exchange_cfg in config.exchanges.iter().filter(|e| e.enabled) {
         let Some(adapter) = get_adapter(&exchange_cfg.name) else {
@@ -105,6 +125,9 @@ async fn main() -> anyhow::Result<()> {
         };
 
         println!("Starting {} collector", exchange_cfg.name);
+
+        // 👇 METRIC: one exchange instance started
+        METRICS.exchanges_active.fetch_add(1, Ordering::Relaxed);
 
         run_exchange(
             adapter,
