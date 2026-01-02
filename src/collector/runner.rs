@@ -2,12 +2,40 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, tungstenite::Utf8By
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
+use std::io::Read;
+use tokio::sync::OnceCell;
 
 use crate::{
     exchanges::adapter::{ExchangeAdapter, ChannelType},
     master_sender::MasterPool,
     config::ExchangeConfig,
 };
+
+static KUCOIN_WS_URL: OnceCell<String> = OnceCell::const_new();
+
+async fn get_kucoin_ws_url() -> anyhow::Result<String> {
+    KUCOIN_WS_URL
+        .get_or_try_init(|| async {
+            let res: serde_json::Value = reqwest::Client::new()
+                .post("https://api.kucoin.com/api/v1/bullet-public")
+                .send()
+                .await?
+                .json()
+                .await?;
+
+            let token = res["data"]["token"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("KuCoin token missing"))?;
+
+            let endpoint = res["data"]["instanceServers"][0]["endpoint"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("KuCoin endpoint missing"))?;
+
+            Ok(format!("{endpoint}?token={token}"))
+        })
+        .await
+        .map(|s| s.clone())
+}
 
 /// Starts all collectors for a single exchange.
 ///
@@ -173,23 +201,35 @@ async fn run_ws_loop(
     master: MasterPool,
 ) {
     loop {
-        match connect_async(adapter.ws_url()).await {
+        let ws_url = if adapter.name() == "kucoin" {
+            match get_kucoin_ws_url().await {
+                Ok(url) => url,
+                Err(e) => {
+                    eprintln!("[KUCOIN] failed to fetch WS url: {e}");
+                    sleep(Duration::from_secs(10)).await;
+                    continue;
+                }
+            }
+        } else {
+            adapter.ws_url().to_string()
+        };
+
+        match connect_async(&ws_url).await {
             Ok((ws, _)) => {
                 let (mut write, mut read) = ws.split();
 
-                // Build and send subscription message
+                // Subscribe
                 let sub = adapter.build_subscribe_message(channel, &pairs, &cfg);
                 if write
                     .send(Message::Text(Utf8Bytes::from(sub.to_string())))
                     .await
                     .is_err()
                 {
-                    // Failed to subscribe → retry connection
                     sleep(Duration::from_secs(5)).await;
                     continue;
                 }
 
-                // Read loop
+                // READ LOOP
                 while let Some(msg) = read.next().await {
                     match msg {
                         Ok(Message::Text(text)) => {
@@ -200,16 +240,33 @@ async fn run_ws_loop(
                             }
                         }
 
-                        // Ignore non-text frames (ping/pong/binary)
+                        Ok(Message::Binary(bin)) => {
+                            let mut decoder = flate2::read::GzDecoder::new(&bin[..]);
+                            let mut decoded = String::new();
+
+                            if decoder.read_to_string(&mut decoded).is_ok() {
+                                if let Some(mm) = adapter.parse_message(&decoded, adapter.name()) {
+                                    let _ = master
+                                        .send(serde_json::to_value(mm).unwrap())
+                                        .await;
+                                }
+                            }
+                        }
+
+                        Ok(Message::Ping(p)) => {
+                            let _ = write.send(Message::Pong(p)).await;
+                        }
+
+                        Ok(Message::Close(_)) => break,
+
+                        // ✅ CATCH-ALL für Pong, Frame, zukünftige Varianten
                         Ok(_) => {}
 
-                        // Any error → break and reconnect
                         Err(_) => break,
                     }
                 }
             }
 
-            // Initial connection failed
             Err(e) => {
                 eprintln!(
                     "WS connect failed [{} {:?}] – retry in 5s",
@@ -220,7 +277,6 @@ async fn run_ws_loop(
             }
         }
 
-        // Reconnect delay
         sleep(Duration::from_secs(5)).await;
     }
 }
