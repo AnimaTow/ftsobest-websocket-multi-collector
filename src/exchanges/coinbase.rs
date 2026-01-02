@@ -6,21 +6,16 @@ use crate::{
     config::ExchangeConfig,
 };
 
-use super::adapter::{ExchangeAdapter, ChannelType};
+use super::adapter::{ExchangeAdapter, ChannelType, ParseResult};
 
 /// Coinbase WebSocket adapter
 ///
 /// Coinbase Advanced Trade WS:
-/// wss://advanced-trade-ws.coinbase.com
+/// wss://ws-feed.exchange.coinbase.com
 ///
 /// Channels:
 /// - matches  → trades
 /// - level2   → order book deltas
-///
-/// DESIGN:
-/// - Pure protocol translation
-/// - No reconnect logic
-/// - No storage / master logic
 pub struct CoinbaseAdapter;
 
 #[async_trait::async_trait]
@@ -41,26 +36,18 @@ impl ExchangeAdapter for CoinbaseAdapter {
         _config: &ExchangeConfig,
     ) -> Value {
 
-        // BTC/USD → BTC-USD
         let product_ids: Vec<String> = pairs
             .iter()
             .map(|p| util::symbol_to_exchange(self.name(), p))
             .collect();
 
         match channel {
-
-            // -----------------------------
-            // TRADES
-            // -----------------------------
             ChannelType::Trades => json!({
                 "type": "subscribe",
                 "product_ids": product_ids,
                 "channels": ["matches"]
             }),
 
-            // -----------------------------
-            // ORDER BOOK (L2 deltas)
-            // -----------------------------
             ChannelType::OrderBooks => json!({
                 "type": "subscribe",
                 "product_ids": product_ids,
@@ -73,42 +60,82 @@ impl ExchangeAdapter for CoinbaseAdapter {
         &self,
         raw: &str,
         exchange: &str,
-    ) -> Option<MarketMessage> {
+    ) -> ParseResult {
 
-        let v: Value = serde_json::from_str(raw).ok()?;
-        let msg_type = v.get("type")?.as_str()?;
+        let v: Value = match serde_json::from_str(raw) {
+            Ok(v) => v,
+            Err(_) => return ParseResult::Error,
+        };
+
+        let msg_type = match v.get("type").and_then(|t| t.as_str()) {
+            Some(t) => t,
+            None => return ParseResult::Control,
+        };
 
         match msg_type {
 
-            // -----------------------------
+            // --------------------------------------------------
             // TRADES
-            // -----------------------------
-            "match" => Some(MarketMessage::Trade(TradeData {
-                exchange: exchange.to_string(),
-                symbol: util::symbol_from_exchange(
-                    exchange,
-                    v.get("product_id")?.as_str()?
-                ),
-                timestamp: util::now_ms(),
-                price: v.get("price")?.as_str()?.to_string(),
-                amount: v.get("size")?.as_str()?.to_string(),
-                side: v.get("side")?.as_str()?.to_string(),
-            })),
+            // --------------------------------------------------
+            "match" => {
+                let msg = MarketMessage::Trade(TradeData {
+                    exchange: exchange.to_string(),
+                    symbol: util::symbol_from_exchange(
+                        exchange,
+                        v.get("product_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                    ),
+                    timestamp: util::now_ms(),
+                    price: v.get("price")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0")
+                        .to_string(),
+                    amount: v.get("size")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0")
+                        .to_string(),
+                    side: v.get("side")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                });
 
-            // -----------------------------
-            // ORDER BOOK (delta)
-            // -----------------------------
+                ParseResult::Market(msg)
+            }
+
+            // --------------------------------------------------
+            // ORDER BOOK (L2 delta)
+            // --------------------------------------------------
             "l2update" => {
-                let product_id = v.get("product_id")?.as_str()?;
-                let changes = v.get("changes")?.as_array()?;
+                let product_id = match v.get("product_id").and_then(|v| v.as_str()) {
+                    Some(p) => p,
+                    None => return ParseResult::Error,
+                };
+
+                let changes = match v.get("changes").and_then(|v| v.as_array()) {
+                    Some(c) => c,
+                    None => return ParseResult::Control,
+                };
 
                 let mut bids = Vec::new();
                 let mut asks = Vec::new();
 
                 for c in changes {
-                    let side = c.get(0)?.as_str()?;
-                    let price = c.get(1)?.as_str()?.to_string();
-                    let qty   = c.get(2)?.as_str()?.to_string();
+                    let side = match c.get(0).and_then(|v| v.as_str()) {
+                        Some(s) => s,
+                        None => continue,
+                    };
+
+                    let price = match c.get(1).and_then(|v| v.as_str()) {
+                        Some(p) => p.to_string(),
+                        None => continue,
+                    };
+
+                    let qty = match c.get(2).and_then(|v| v.as_str()) {
+                        Some(q) => q.to_string(),
+                        None => continue,
+                    };
 
                     if qty == "0" {
                         continue;
@@ -121,16 +148,22 @@ impl ExchangeAdapter for CoinbaseAdapter {
                     }
                 }
 
-                Some(MarketMessage::Book(BookData {
+                let msg = MarketMessage::Book(BookData {
                     exchange: exchange.to_string(),
                     symbol: util::symbol_from_exchange(exchange, product_id),
                     timestamp: util::now_ms(),
                     asks,
                     bids,
-                }))
+                });
+
+                ParseResult::Market(msg)
             }
 
-            _ => None,
+            // --------------------------------------------------
+            // Everything else:
+            // subscriptions, heartbeat, errors, etc.
+            // --------------------------------------------------
+            _ => ParseResult::Control,
         }
     }
 }

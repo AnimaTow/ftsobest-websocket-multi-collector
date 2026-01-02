@@ -4,12 +4,10 @@ use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use std::io::Read;
 use tokio::sync::OnceCell;
+use std::sync::atomic::Ordering;
 
-use crate::{
-    exchanges::adapter::{ExchangeAdapter, ChannelType},
-    master_sender::MasterPool,
-    config::ExchangeConfig,
-};
+use crate::metrics::METRICS;
+use crate::{exchanges::adapter::{ExchangeAdapter, ChannelType, ParseResult}, master_sender::MasterPool, config::ExchangeConfig, util};
 
 static KUCOIN_WS_URL: OnceCell<String> = OnceCell::const_new();
 
@@ -37,30 +35,11 @@ async fn get_kucoin_ws_url() -> anyhow::Result<String> {
         .map(|s| s.clone())
 }
 
-/// Starts all collectors for a single exchange.
-///
-/// This function is responsible for:
-/// - Spawning WebSocket connections for each enabled channel
-/// - Applying channel-specific chunking strategies
-/// - Keeping collectors alive indefinitely
-///
-/// DESIGN:
-/// - One exchange → multiple WebSocket connections
-/// - One channel may spawn multiple WS connections
-/// - Failures are isolated per connection
-///
-/// This function does NOT:
-/// - Perform reconnection logic (handled inside WS loop)
-/// - Parse messages (delegated to adapters)
-/// - Apply exchange-specific behavior
-///
 pub async fn run_exchange(
     adapter: Arc<dyn ExchangeAdapter>,
     cfg: ExchangeConfig,
     master: MasterPool,
 ) -> anyhow::Result<()> {
-
-    // Spawn trade collectors (chunked)
     spawn_channel_chunks(
         adapter.clone(),
         cfg.clone(),
@@ -68,7 +47,6 @@ pub async fn run_exchange(
         master.clone(),
     );
 
-    // Spawn orderbook collectors (one WS per pair)
     spawn_channel_chunks(
         adapter,
         cfg,
@@ -79,20 +57,6 @@ pub async fn run_exchange(
     Ok(())
 }
 
-/// Spawns WebSocket collectors for a specific channel.
-///
-/// Behavior depends on channel type:
-/// - Trades: symbols are chunked per connection
-/// - Orderbooks: exactly one WebSocket per symbol
-///
-/// RATIONALE:
-/// - Trade channels allow batching to reduce WS connections
-/// - Orderbook channels must be isolated to guarantee correctness
-///
-/// SAFETY:
-/// - Each spawned task is fully isolated
-/// - A failing WS does not affect others
-///
 fn spawn_channel_chunks(
     adapter: Arc<dyn ExchangeAdapter>,
     cfg: ExchangeConfig,
@@ -100,15 +64,13 @@ fn spawn_channel_chunks(
     master: MasterPool,
 ) {
     match channel {
-
-        // --------------------------------------------------
-        // TRADES
-        // --------------------------------------------------
-        // Multiple symbols per WebSocket connection
-        // Chunk size controlled via configuration
-        //
         ChannelType::Trades => {
             let pairs = cfg.pairs.trades.clone();
+
+            METRICS
+                .trade_pairs_active
+                .fetch_add(pairs.len(), Ordering::Relaxed);
+
             let chunk_size = cfg.chunking.trades_per_connection;
 
             for chunk in pairs.chunks(chunk_size) {
@@ -124,24 +86,20 @@ fn spawn_channel_chunks(
                         ChannelType::Trades,
                         chunk_pairs,
                         master,
-                    ).await;
+                    )
+                        .await;
                 });
             }
         }
 
-        // --------------------------------------------------
-        // ORDERBOOKS
-        // --------------------------------------------------
-        // Exactly one WebSocket connection per symbol
-        //
-        // IMPORTANT:
-        // - Orderbook streams must not be mixed
-        // - Mixing would break depth consistency and dedup logic
-        //
         ChannelType::OrderBooks => {
-            for pair in cfg.pairs.orderbooks.iter().cloned() {
+            let pairs = cfg.pairs.orderbooks.clone();
 
-                // Debug visibility for operational insight
+            METRICS
+                .orderbook_pairs_active
+                .fetch_add(pairs.len(), Ordering::Relaxed);
+
+            for pair in pairs {
                 eprintln!(
                     "[ORDERBOOK] spawning WS for {} on {}",
                     pair,
@@ -159,40 +117,14 @@ fn spawn_channel_chunks(
                         ChannelType::OrderBooks,
                         vec![pair],
                         master,
-                    ).await;
+                    )
+                        .await;
                 });
             }
         }
     }
 }
 
-/// Runs a persistent WebSocket connection for exactly one symbol set.
-///
-/// This loop:
-/// - Connects to the exchange WebSocket endpoint
-/// - Subscribes to the requested channel
-/// - Continuously reads messages
-/// - Reconnects automatically on failure
-///
-/// GUARANTEES:
-/// - This loop never exits voluntarily
-/// - Failures cause a reconnect after a delay
-///
-/// RESPONSIBILITIES:
-/// - Connection lifecycle
-/// - Subscription sending
-/// - Message forwarding to MasterPool
-///
-/// NOT RESPONSIBLE FOR:
-/// - Message parsing (adapter responsibility)
-/// - Data validation
-/// - Deduplication (handled downstream)
-///
-/// TODO:
-/// - Add exponential backoff
-/// - Add connection-level metrics
-/// - Add graceful shutdown support
-///
 async fn run_ws_loop(
     adapter: Arc<dyn ExchangeAdapter>,
     cfg: ExchangeConfig,
@@ -216,28 +148,93 @@ async fn run_ws_loop(
 
         match connect_async(&ws_url).await {
             Ok((ws, _)) => {
-                let (mut write, mut read) = ws.split();
+                METRICS
+                    .ws_connections_active
+                    .fetch_add(1, Ordering::Relaxed);
 
-                // Subscribe
+                let (write, mut read) = ws.split();
+                let write = Arc::new(tokio::sync::Mutex::new(write));
+
+                // ---- KUCOIN CLIENT PING LOOP ----
+                if adapter.name() == "kucoin" {
+                    let ping_interval = ws_url
+                        .split("|ping=")
+                        .nth(1)
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(20000);
+
+                    let ping_write = write.clone();
+
+                    let ping_every = Duration::from_millis(ping_interval / 2);
+
+                    tokio::spawn(async move {
+                        loop {
+                            sleep(ping_every).await;
+
+                            let ping = serde_json::json!({
+                "type": "ping",
+                "id": util::now_ms().to_string()
+            });
+
+                            if ping_write
+                                .lock()
+                                .await
+                                .send(Message::Text(Utf8Bytes::from(ping.to_string())))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    });
+                }
+
+
                 let sub = adapter.build_subscribe_message(channel, &pairs, &cfg);
                 if write
+                    .lock()
+                    .await
                     .send(Message::Text(Utf8Bytes::from(sub.to_string())))
                     .await
                     .is_err()
                 {
-                    sleep(Duration::from_secs(5)).await;
-                    continue;
+                    METRICS
+                        .ws_connections_active
+                        .fetch_sub(1, Ordering::Relaxed);
+                    break;
                 }
 
-                // READ LOOP
                 while let Some(msg) = read.next().await {
                     match msg {
                         Ok(Message::Text(text)) => {
-                            if let Some(mm) = adapter.parse_message(&text, adapter.name()) {
-                                let _ = master
-                                    .send(serde_json::to_value(mm).unwrap())
-                                    .await;
+                            // ---- KUCOIN JSON PING HANDLING ----
+                            if adapter.name() == "kucoin" {
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                                    if v.get("type").and_then(|t| t.as_str()) == Some("ping") {
+                                        let pong = serde_json::json!({
+                                            "type": "pong",
+                                            "id": v.get("id")
+                                        });
+
+                                        let _ = write
+                                            .lock()
+                                            .await
+                                            .send(Message::Text(Utf8Bytes::from(pong.to_string())))
+                                            .await;
+
+                                        // optional metrics
+                                        // METRICS.pongs_sent.fetch_add(1, Ordering::Relaxed);
+                                        continue;
+                                    }
+                                }
                             }
+
+                            // ---- NORMAL MESSAGE FLOW ----
+                            handle_parsed(
+                                adapter.parse_message(&text, adapter.name()),
+                                &master,
+                            )
+                                .await;
                         }
 
                         Ok(Message::Binary(bin)) => {
@@ -245,26 +242,38 @@ async fn run_ws_loop(
                             let mut decoded = String::new();
 
                             if decoder.read_to_string(&mut decoded).is_ok() {
-                                if let Some(mm) = adapter.parse_message(&decoded, adapter.name()) {
-                                    let _ = master
-                                        .send(serde_json::to_value(mm).unwrap())
-                                        .await;
-                                }
+                                handle_parsed(
+                                    adapter.parse_message(&decoded, adapter.name()),
+                                    &master,
+                                )
+                                    .await;
                             }
                         }
 
                         Ok(Message::Ping(p)) => {
-                            let _ = write.send(Message::Pong(p)).await;
+                            let _ = write
+                                .lock()
+                                .await
+                                .send(Message::Pong(p))
+                                .await;
                         }
 
-                        Ok(Message::Close(_)) => break,
-
-                        // ✅ CATCH-ALL für Pong, Frame, zukünftige Varianten
+                        Ok(Message::Close(frame)) => {
+                            eprintln!(
+                                "[WS CLOSE][{}] {:?}",
+                                adapter.name(),
+                                frame
+                            );
+                            break;
+                        }
                         Ok(_) => {}
-
                         Err(_) => break,
                     }
                 }
+
+                METRICS
+                    .ws_connections_active
+                    .fetch_sub(1, Ordering::Relaxed);
             }
 
             Err(e) => {
@@ -277,6 +286,34 @@ async fn run_ws_loop(
             }
         }
 
+        METRICS.ws_reconnects.fetch_add(1, Ordering::Relaxed);
         sleep(Duration::from_secs(5)).await;
+    }
+}
+
+async fn handle_parsed(
+    result: ParseResult,
+    master: &MasterPool,
+) {
+    match result {
+        ParseResult::Market(mm) => {
+            METRICS.trades_received.fetch_add(1, Ordering::Relaxed);
+
+            if master.send(serde_json::to_value(mm).unwrap()).await.is_ok() {
+                METRICS.trades_forwarded.fetch_add(1, Ordering::Relaxed);
+            } else {
+                METRICS.send_errors.fetch_add(1, Ordering::Relaxed);
+                METRICS.dropped_messages.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        ParseResult::Control => {
+            // optional:
+            // METRICS.control_messages.fetch_add(1, Ordering::Relaxed);
+        }
+
+        ParseResult::Error => {
+            METRICS.parse_errors.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }

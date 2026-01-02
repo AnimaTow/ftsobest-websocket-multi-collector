@@ -6,7 +6,7 @@ use crate::{
     config::ExchangeConfig,
 };
 
-use super::adapter::{ExchangeAdapter, ChannelType};
+use super::adapter::{ExchangeAdapter, ChannelType, ParseResult};
 
 /// OKX WebSocket adapter
 ///
@@ -54,7 +54,6 @@ impl ExchangeAdapter for OkxAdapter {
                 })
             }
 
-            // OKX order books intentionally not implemented here
             ChannelType::OrderBooks => json!({}),
         }
     }
@@ -63,33 +62,72 @@ impl ExchangeAdapter for OkxAdapter {
         &self,
         raw: &str,
         exchange: &str,
-    ) -> Option<MarketMessage> {
+    ) -> ParseResult {
 
-        let v: Value = serde_json::from_str(raw).ok()?;
+        let v: Value = match serde_json::from_str(raw) {
+            Ok(v) => v,
+            Err(_) => return ParseResult::Error,
+        };
 
-        let arg = v.get("arg")?;
-        let channel = arg.get("channel")?.as_str()?;
-        if channel != "trades" {
-            return None;
+        // --------------------------------------------------
+        // Control / error messages
+        // --------------------------------------------------
+        if let Some(event) = v.get("event").and_then(|v| v.as_str()) {
+            if event == "error" {
+                return ParseResult::Error;
+            }
+            return ParseResult::Control; // subscribe, unsubscribe, etc.
         }
 
-        let inst_id = arg.get("instId")?.as_str()?;
+        let arg = match v.get("arg") {
+            Some(a) => a,
+            None => return ParseResult::Control,
+        };
+
+        let channel = match arg.get("channel").and_then(|v| v.as_str()) {
+            Some(c) => c,
+            None => return ParseResult::Control,
+        };
+
+        if channel != "trades" {
+            return ParseResult::Control;
+        }
+
+        let inst_id = match arg.get("instId").and_then(|v| v.as_str()) {
+            Some(i) => i,
+            None => return ParseResult::Error,
+        };
+
         let symbol = util::symbol_from_exchange(exchange, inst_id);
 
-        let trades = v.get("data")?.as_array()?;
-        let t = trades.first()?;
+        let trades = match v.get("data").and_then(|v| v.as_array()) {
+            Some(t) if !t.is_empty() => t,
+            _ => return ParseResult::Control,
+        };
 
-        Some(MarketMessage::Trade(TradeData {
+        let t = &trades[0];
+
+        let msg = MarketMessage::Trade(TradeData {
             exchange: exchange.to_string(),
             symbol,
             timestamp: t.get("ts")
                 .and_then(|v| v.as_str())
                 .and_then(|s| s.parse::<i64>().ok())
                 .unwrap_or_else(util::now_ms),
-            price: t.get("px")?.as_str()?.to_string(),
-            amount: t.get("sz")?.as_str()?.to_string(),
-            side: t.get("side")?.as_str()?.to_lowercase(),
-        }))
-    }
+            price: t.get("px")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string(),
+            amount: t.get("sz")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string(),
+            side: t.get("side")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_lowercase(),
+        });
 
+        ParseResult::Market(msg)
+    }
 }

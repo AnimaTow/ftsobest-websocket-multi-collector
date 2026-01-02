@@ -63,6 +63,7 @@ pub fn get_adapter(name: &str) -> Option<Arc<dyn ExchangeAdapter>> {
         "kucoin" => Some(Arc::new(kucoin::KucoinAdapter)),
         "coinbase" => Some(Arc::new(coinbase::CoinbaseAdapter)),
         "bybit" => Some(Arc::new(bybit::BybitAdapter)),
+        "mexc" => Some(Arc::new(mexc::MexcAdapter)),
         _ => None,
     }
 }
