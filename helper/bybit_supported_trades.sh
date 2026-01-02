@@ -5,7 +5,7 @@ set -euo pipefail
 # CONFIG
 # -----------------------------
 FEEDS_URL="https://raw.githubusercontent.com/flare-foundation/ftso-v2-example-value-provider/main/src/config/feeds.json"
-BYBIT_URL="https://api.bybit.com/v5/market/instruments-info?category=spot"
+BYBIT_EXCHANGEINFO_URL="https://api.bybit.com/v5/market/instruments-info?category=spot"
 QUOTES=("USD" "USDT")
 
 TMP_DIR="$(mktemp -d)"
@@ -20,15 +20,30 @@ trap cleanup EXIT
 # -----------------------------
 # FETCH DATA
 # -----------------------------
-echo "→ Fetch feeds.json"
+echo "→ Fetching feeds.json from GitHub"
 curl -fsSL "$FEEDS_URL" -o "$FEEDS_JSON"
 
-echo "→ Fetch Bybit spot instruments"
-curl -fsSL "$BYBIT_URL" \
-  | jq -r '.result.list[]
-           | select(.status=="Trading")
-           | "\(.baseCoin)/\(.quoteCoin)"' \
+echo "→ Fetching Bybit spot instruments"
+curl -fsSL "$BYBIT_EXCHANGEINFO_URL" \
+  | jq -r '
+      .result.list[]
+      | select(.status=="Trading")
+      | "\(.baseCoin | ascii_upcase)/\(.quoteCoin | ascii_upcase)"
+    ' \
   > "$BYBIT_SYMBOLS"
+
+# -----------------------------
+# BASIC VALIDATION
+# -----------------------------
+if [[ ! -s "$FEEDS_JSON" ]]; then
+  echo "❌ feeds.json is empty"
+  exit 1
+fi
+
+if [[ ! -s "$BYBIT_SYMBOLS" ]]; then
+  echo "❌ Bybit symbol list is empty"
+  exit 1
+fi
 
 # -----------------------------
 # PROCESS
@@ -37,14 +52,30 @@ echo
 echo "[BYBIT – SUPPORTED TRADE PAIRS]"
 echo
 
-jq -r '.[].feed.name' "$FEEDS_JSON" \
-| cut -d/ -f1 \
-| sort -u \
-| while read -r BASE; do
-    for QUOTE in "${QUOTES[@]}"; do
-      PAIR="$BASE/$QUOTE"
-      if grep -qx "$PAIR" "$BYBIT_SYMBOLS"; then
-        echo "\"$PAIR\","
-      fi
-    done
+FOUND=0
+
+while read -r BASE; do
+  for QUOTE in "${QUOTES[@]}"; do
+    PAIR="$BASE/$QUOTE"
+    if grep -qx "$PAIR" "$BYBIT_SYMBOLS"; then
+      echo "\"$PAIR\","
+      FOUND=$((FOUND + 1))
+    fi
   done
+done < <(
+  jq -r '.[].feed.name' "$FEEDS_JSON" \
+  | cut -d/ -f1 \
+  | sort -u
+)
+
+# -----------------------------
+# FINAL ASSERTION (CI)
+# -----------------------------
+if [[ "$FOUND" -eq 0 ]]; then
+  echo
+  echo "❌ No supported Bybit trade pairs found"
+  exit 1
+fi
+
+echo
+echo "✅ $FOUND supported Bybit trade pairs found"

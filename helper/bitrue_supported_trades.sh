@@ -12,15 +12,18 @@ TMP_DIR="$(mktemp -d)"
 FEEDS_JSON="$TMP_DIR/feeds.json"
 BITRUE_SYMBOLS="$TMP_DIR/bitrue_symbols.txt"
 
-trap 'rm -rf "$TMP_DIR"' EXIT
+cleanup() {
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
 
 # -----------------------------
 # FETCH DATA
 # -----------------------------
-echo "→ Lade feeds.json"
+echo "→ Fetching feeds.json from GitHub"
 curl -fsSL "$FEEDS_URL" -o "$FEEDS_JSON"
 
-echo "→ Lade Bitrue exchangeInfo (Spot Trades)"
+echo "→ Fetching Bitrue exchangeInfo (spot trades)"
 curl -fsSL "$BITRUE_EXCHANGEINFO_URL" \
 | jq -r '
     .symbols[]
@@ -30,20 +33,49 @@ curl -fsSL "$BITRUE_EXCHANGEINFO_URL" \
 > "$BITRUE_SYMBOLS"
 
 # -----------------------------
+# BASIC VALIDATION
+# -----------------------------
+if [[ ! -s "$FEEDS_JSON" ]]; then
+  echo "❌ feeds.json is empty"
+  exit 1
+fi
+
+if [[ ! -s "$BITRUE_SYMBOLS" ]]; then
+  echo "❌ Bitrue symbol list is empty"
+  exit 1
+fi
+
+# -----------------------------
 # PROCESS
 # -----------------------------
 echo
-echo "[BITRUE – SUPPORTED *TRADE* PAIRS]"
+echo "[BITRUE – SUPPORTED TRADE PAIRS]"
 echo
 
-jq -r '.[].feed.name' "$FEEDS_JSON" \
-| cut -d/ -f1 \
-| sort -u \
-| while read -r BASE; do
-    for QUOTE in "${QUOTES[@]}"; do
-      SYMBOL="$BASE/$QUOTE"
-      if grep -qx "$SYMBOL" "$BITRUE_SYMBOLS"; then
-        echo "\"$SYMBOL\","
-      fi
-    done
+FOUND=0
+
+while read -r BASE; do
+  for QUOTE in "${QUOTES[@]}"; do
+    SYMBOL="$BASE/$QUOTE"
+    if grep -qx "$SYMBOL" "$BITRUE_SYMBOLS"; then
+      echo "\"$SYMBOL\","
+      FOUND=$((FOUND + 1))
+    fi
   done
+done < <(
+  jq -r '.[].feed.name' "$FEEDS_JSON" \
+  | cut -d/ -f1 \
+  | sort -u
+)
+
+# -----------------------------
+# FINAL ASSERTION (CI)
+# -----------------------------
+if [[ "$FOUND" -eq 0 ]]; then
+  echo
+  echo "❌ No supported Bitrue trade pairs found"
+  exit 1
+fi
+
+echo
+echo "✅ $FOUND supported Bitrue trade pairs found"

@@ -24,3 +24,9 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose
+
+      - name: Run exchange helper checks
+        shell: bash
+        run: |
+          chmod +x helper/run_all_supported_trades.sh
+          helper/run_all_supported_trades.sh
