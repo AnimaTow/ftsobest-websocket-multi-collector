@@ -100,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
             sleep(Duration::from_secs(10)).await;
 
             println!(
-                "[METRICS] ex={} ws={} tp={} ob={} recv={} sent={} dropped={} parse_err={} send_err={} reconnects={}",
+                "[METRICS] ex={} ws={} tp={} ob={} recv={} sent={} dropped={} parse_err={} send_err={} reconnects={} sub_send={} sub_send_err={}",
                 METRICS.exchanges_active.load(Ordering::Relaxed),
                 METRICS.ws_connections_active.load(Ordering::Relaxed),
                 METRICS.trade_pairs_active.load(Ordering::Relaxed),
@@ -111,6 +111,8 @@ async fn main() -> anyhow::Result<()> {
                 METRICS.parse_errors.load(Ordering::Relaxed),
                 METRICS.send_errors.load(Ordering::Relaxed),
                 METRICS.ws_reconnects.load(Ordering::Relaxed),
+                METRICS.subscriptions_sent.load(Ordering::Relaxed),
+                METRICS.subscription_errors.load(Ordering::Relaxed),
             );
         }
     });

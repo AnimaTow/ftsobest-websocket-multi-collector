@@ -96,6 +96,12 @@ impl ExchangeAdapter for MexcAdapter {
 
         let t = &trades[0];
 
+        let side = match t.get("T").and_then(|v| v.as_i64()) {
+            Some(1) => "buy",
+            Some(2) => "sell",
+            _ => "unknown",
+        }.to_string();
+
         let msg = MarketMessage::Trade(TradeData {
             exchange: exchange.to_string(),
             symbol,
@@ -108,11 +114,7 @@ impl ExchangeAdapter for MexcAdapter {
             amount: t.get("v")
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "0".to_string()),
-            side: match t.get("S").and_then(|v| v.as_i64()) {
-                Some(1) => "buy".into(),
-                Some(2) => "sell".into(),
-                _ => "unknown".into(),
-            },
+            side,
         });
 
         ParseResult::Market(msg)

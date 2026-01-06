@@ -35,6 +35,9 @@ pub struct RuntimeMetrics {
     pub send_errors: AtomicUsize,
     pub ws_reconnects: AtomicUsize,
     pub dropped_messages: AtomicUsize,
+
+    pub subscriptions_sent: AtomicUsize,
+    pub subscription_errors: AtomicUsize,
 }
 
 /// Global metrics registry (singleton)

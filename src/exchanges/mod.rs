@@ -18,6 +18,9 @@ mod kucoin;
 mod coinbase;
 mod bybit;
 mod mexc;
+mod kraken_v2;
+mod bitstamp;
+mod bitfinex;
 
 use std::sync::Arc;
 use adapter::ExchangeAdapter;
@@ -64,6 +67,9 @@ pub fn get_adapter(name: &str) -> Option<Arc<dyn ExchangeAdapter>> {
         "coinbase" => Some(Arc::new(coinbase::CoinbaseAdapter)),
         "bybit" => Some(Arc::new(bybit::BybitAdapter)),
         "mexc" => Some(Arc::new(mexc::MexcAdapter)),
+        "kraken" => Some(Arc::new(kraken_v2::KrakenV2Adapter::new())),
+        "bitstamp" => Some(Arc::new(bitstamp::BitstampAdapter)),
+        "bitfinex"  => Some(Arc::new(bitfinex::BitfinexAdapter::new())),
         _ => None,
     }
 }
