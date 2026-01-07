@@ -190,19 +190,56 @@ async fn run_ws_loop(
                 }
 
 
-                let sub = adapter.build_subscribe_message(channel, &pairs, &cfg);
-                if write
-                    .lock()
-                    .await
-                    .send(Message::Text(Utf8Bytes::from(sub.to_string())))
-                    .await
-                    .is_err()
-                {
-                    METRICS
-                        .ws_connections_active
-                        .fetch_sub(1, Ordering::Relaxed);
-                    break;
+                match adapter.name() {
+                    // Exchanges that require ONE subscribe per symbol
+                    "bitfinex" | "bitstamp" => {
+                        for pair in &pairs {
+                            let sub = adapter.build_subscribe_message(
+                                channel,
+                                &[pair.clone()],
+                                &cfg,
+                            );
+
+                            if write
+                                .lock()
+                                .await
+                                .send(Message::Text(Utf8Bytes::from(sub.to_string())))
+                                .await
+                                .is_err()
+                            {
+                                METRICS.subscription_errors.fetch_add(1, Ordering::Relaxed);
+                                METRICS
+                                    .ws_connections_active
+                                    .fetch_sub(1, Ordering::Relaxed);
+                                break;
+                            }
+
+                            METRICS.subscriptions_sent.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+
+                    // Exchanges that support batch subscribe
+                    _ => {
+                        let sub = adapter.build_subscribe_message(channel, &pairs, &cfg);
+
+                        if write
+                            .lock()
+                            .await
+                            .send(Message::Text(Utf8Bytes::from(sub.to_string())))
+                            .await
+                            .is_err()
+                        {
+                            METRICS.subscription_errors.fetch_add(1, Ordering::Relaxed);
+                            METRICS
+                                .ws_connections_active
+                                .fetch_sub(1, Ordering::Relaxed);
+                            break;
+                        }
+
+                        METRICS.subscriptions_sent.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
+
 
                 while let Some(msg) = read.next().await {
                     match msg {

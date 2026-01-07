@@ -84,9 +84,11 @@ pub fn symbol_to_exchange(exchange: &str, symbol: &str) -> String {
     match exchange {
         "gateio" => symbol.replace('/', "_"),
         "bitrue" => symbol.replace('/', "").to_lowercase(),
+        "bitstamp" => symbol.replace('/', "").to_lowercase(),
         "binance" | "binanceus" | "bybit" => symbol.replace('/', ""),
         "okx" | "kucoin" | "coinbase" => symbol.replace('/', "-"),
         "mexc" => symbol.replace('/', "_"),
+        "bitfinex" => format!("t{}", symbol.replace('/', "")),
         _ => symbol.to_string(),
     }
 }
@@ -122,6 +124,7 @@ pub fn symbol_from_exchange(exchange: &str, symbol: &str) -> String {
     match exchange {
         "gateio" => symbol.replace('_', "/"),
         "mexc" => symbol.replace('_', "/"),
+
         "binance" | "binanceus" => {
             for quote in BINANCE_QUOTES {
                 if symbol.ends_with(quote) {
@@ -131,11 +134,11 @@ pub fn symbol_from_exchange(exchange: &str, symbol: &str) -> String {
                     }
                 }
             }
-
-            // Fallback – should never happen for valid config symbols
             symbol.to_string()
         },
+
         "okx" | "kucoin" | "coinbase" => symbol.replace('-', "/"),
+
         "bybit" => {
             for quote in ["USDT", "USD"] {
                 if symbol.ends_with(quote) {
@@ -145,6 +148,20 @@ pub fn symbol_from_exchange(exchange: &str, symbol: &str) -> String {
             }
             symbol.to_string()
         },
+
+        "bitstamp" => {
+            let s = symbol.to_uppercase();
+            for quote in ["USDT", "USD", "USDC"] {
+                if s.ends_with(quote) {
+                    let base = &s[..s.len() - quote.len()];
+                    if !base.is_empty() {
+                        return format!("{}/{}", base, quote);
+                    }
+                }
+            }
+            s
+        },
+
         "bitrue" => {
             if symbol.ends_with("usdt") {
                 format!("{}/USDT", symbol[..symbol.len() - 4].to_uppercase())
@@ -153,6 +170,24 @@ pub fn symbol_from_exchange(exchange: &str, symbol: &str) -> String {
             } else {
                 symbol.to_uppercase()
             }
+        },
+
+        "kraken" => {
+            let s = symbol.replace('-', "/");
+            if s.starts_with("XBT/") {
+                s.replacen("XBT/", "BTC/", 1)
+            } else {
+                s
+            }
+        },
+        "bitfinex" => {
+            let s = symbol.trim_start_matches('t');
+            for quote in ["USDT", "USD", "USDC"] {
+                if s.ends_with(quote) {
+                    return format!("{}/{}", &s[..s.len()-quote.len()], quote);
+                }
+            }
+            s.to_string()
         },
         _ => symbol.to_string(),
     }

@@ -67,7 +67,10 @@ Currently implemented:
 - OKX
 - KuCoin
 - Bitrue
--
+- Bitfinix
+- Bitstamp
+- Kraken
+- 
 Planned:
 - Mexc
 
